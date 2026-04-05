@@ -1,3 +1,0 @@
--keepattributes *Annotation*
--keep class com.coinbell.cardlistener.** { *; }
--dontwarn kotlin.**
