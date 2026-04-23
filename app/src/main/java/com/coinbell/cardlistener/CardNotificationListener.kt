@@ -33,19 +33,28 @@ class CardNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName
-        if (pkg !in CARD_PACKAGES) return
         val extras = sbn.notification.extras
         val title = extras.getString("android.title") ?: ""
         val text = extras.getString("android.text") ?: ""
         val bigText = extras.getString("android.bigText") ?: ""
         val body = if (bigText.isNotBlank()) bigText else text
+
+        // ALL 알림을 디버그 스토어에 기록 (필터링 전)
+        if (pkg !in CARD_PACKAGES) {
+            LogStore.add(LogStore.Kind.SKIP, pkg, title, body, "(not in CARD_PACKAGES)")
+            return
+        }
         Log.d(TAG, "recv pkg=$pkg title='$title' body='$body'")
-        val parsed = parseNotification(pkg, title, body) ?: run {
+        val parsed = parseNotification(pkg, title, body)
+        if (parsed == null) {
             Log.w(TAG, "parse failed pkg=$pkg title='$title' body='$body'")
+            LogStore.add(LogStore.Kind.PARSE_FAIL, pkg, title, body, "(정규식 매칭 실패 — 실제값 보고 정규식 조정 필요)")
             return
         }
         Log.d(TAG, "parsed pkg=$pkg amount=${parsed.amount} merchant='${parsed.merchant}' card_last4='${parsed.cardLast4}' card_name='${parsed.cardName}'")
-        sendToServer(parsed)
+        LogStore.add(LogStore.Kind.MATCH, pkg, title, body,
+            "→ parsed: amount=${parsed.amount} merchant='${parsed.merchant}' card_last4='${parsed.cardLast4}' card_name='${parsed.cardName}'")
+        sendToServer(parsed, pkg, title, body)
     }
 
     data class CardTx(
@@ -109,7 +118,7 @@ class CardNotificationListener : NotificationListenerService() {
         return CardTx(amount, merchantCandidate, paymentType, installMonths, date, time, cardLast4, cardName)
     }
 
-    private fun sendToServer(tx: CardTx) {
+    private fun sendToServer(tx: CardTx, ctxPkg: String = "", ctxTitle: String = "", ctxBody: String = "") {
         Thread {
             try {
                 val conn = URL(SERVER_URL).openConnection() as HttpURLConnection
@@ -134,9 +143,13 @@ class CardNotificationListener : NotificationListenerService() {
                 val resp = try { conn.inputStream.bufferedReader().use { it.readText() } }
                            catch (_: Exception) { conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "" }
                 Log.d(TAG, "POST $SERVER_URL code=$code resp='$resp' payload=$payload")
+                LogStore.add(LogStore.Kind.POST_OK, ctxPkg, ctxTitle, ctxBody,
+                    "→ POST code=$code resp=${resp.take(200)}")
                 conn.disconnect()
             } catch (e: Exception) {
                 Log.e(TAG, "POST fail: ${e.message}")
+                LogStore.add(LogStore.Kind.POST_FAIL, ctxPkg, ctxTitle, ctxBody,
+                    "→ POST exception: ${e.javaClass.simpleName}: ${e.message}")
             }
         }.start()
     }
